@@ -39,6 +39,14 @@
   details { font-size:.88rem; color:var(--gris); }
   details summary { cursor:pointer; color:var(--texto); }
   code { background:#f3eeec; padding:1px 4px; border-radius:4px; }
+  #status { display:none; align-items:center; gap:10px; margin-top:12px; padding:10px 14px; border-radius:8px; font-size:.92rem; }
+  #status.show { display:flex; }
+  #status.busy { background:#fbf1f4; color:var(--vino); }
+  #status.ok { background:#e9f5ee; color:#1d6b3a; }
+  #status.err { background:#fdecee; color:#b00020; }
+  .spin { width:18px; height:18px; border:3px solid #e8c9d3; border-top-color:var(--vino); border-radius:50%; animation:g .8s linear infinite; flex:none; }
+  @keyframes g { to { transform:rotate(360deg); } }
+  #drop.loaded { border-style:solid; border-color:#9cc9ad; background:#f4faf6; }
   footer { text-align:center; color:var(--gris); font-size:.8rem; padding:10px 0 30px; }
 </style>
 </head>
@@ -51,7 +59,7 @@
   <section class="card">
     <h2>1. Cargar espectros</h2>
     <div id="drop">
-      <strong>Arrastrá un archivo aquí</strong> o hacé clic para elegirlo<br>
+      <span id="dropTxt"><strong>Arrastrá un archivo aquí</strong> o hacé clic para elegirlo</span><br>
       <small>.xlsx, .xls, .csv o .txt — primera columna: longitud de onda (nm); resto: una columna de absorbancia por muestra</small>
       <input type="file" id="file" accept=".xlsx,.xls,.ods,.csv,.txt,.tsv" hidden>
     </div>
@@ -59,6 +67,7 @@
       <label id="sheetWrap" hidden>Hoja: <select id="sheet"></select></label>
       <span id="fname" class="msg"></span>
     </div>
+    <div id="status" role="status" aria-live="polite"></div>
     <details style="margin-top:12px">
       <summary>…o pegar datos copiados desde Excel</summary>
       <textarea id="paste" placeholder="longdeonda&#9;muestra1&#9;muestra2&#10;380&#9;0.5576&#9;0.5958&#10;381&#9;0.5462&#9;0.5847&#10;..."></textarea>
@@ -121,23 +130,48 @@
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]); };
   fileIn.onchange = () => fileIn.files[0] && readFile(fileIn.files[0]);
 
-  function readFile(f) {
-    const rd = new FileReader();
-    rd.onload = ev => {
-      try {
-        workbook = XLSX.read(ev.target.result, { type: 'array' });
-        const sel = $('sheet'); sel.innerHTML = '';
-        workbook.SheetNames.forEach(n => sel.add(new Option(n, n)));
-        $('sheetWrap').hidden = workbook.SheetNames.length < 2;
-        setMsg($('fname'), f.name, '');
-        loadSheet(workbook.SheetNames[0]);
-      } catch (err) { setMsg($('fname'), 'No se pudo leer el archivo: ' + err.message, 'err'); }
-    };
-    rd.readAsArrayBuffer(f);
+  // espera a que el navegador dibuje el aviso antes de hacer el trabajo pesado
+  const paint = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+  let source = '';
+
+  async function readFile(f) {
+    source = f.name;
+    status('busy', 'Leyendo «' + f.name + '»…');
+    $('resCard').hidden = true;
+    try {
+      if (typeof XLSX === 'undefined') throw new Error('no se cargó la librería de Excel (revisá la conexión a internet y recargá la página).');
+      const buf = await f.arrayBuffer();
+      await paint();
+      workbook = XLSX.read(buf, { type: 'array', cellFormula: false, cellHTML: false, cellText: false, cellStyles: false, cellDates: false });
+      const sel = $('sheet'); sel.innerHTML = '';
+      workbook.SheetNames.forEach(n => sel.add(new Option(n, n)));
+      $('sheetWrap').hidden = workbook.SheetNames.length < 2;
+      setMsg($('fname'), '', '');
+      await loadSheet(workbook.SheetNames[0]);
+    } catch (err) { status('err', '✗ No se pudo leer el archivo: ' + err.message); }
+    fileIn.value = '';   // permite volver a subir el mismo archivo
   }
   $('sheet').onchange = e => loadSheet(e.target.value);
-  function loadSheet(name) {
-    grid = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, blankrows: false, defval: null });
+
+  // rango realmente usado (Excel a veces declara miles de filas/columnas vacías)
+  function usedRange(ws) {
+    let r0 = Infinity, c0 = Infinity, r1 = -1, c1 = -1;
+    for (const k in ws) {
+      if (k[0] === '!') continue;
+      const c = ws[k]; if (c == null || c.v == null || c.v === '') continue;
+      const a = XLSX.utils.decode_cell(k);
+      if (a.r < r0) r0 = a.r; if (a.r > r1) r1 = a.r; if (a.c < c0) c0 = a.c; if (a.c > c1) c1 = a.c;
+    }
+    return r1 < 0 ? null : XLSX.utils.encode_range({ r: r0, c: c0 }, { r: r1, c: c1 });
+  }
+  async function loadSheet(name) {
+    status('busy', 'Calculando CIELAB…');
+    await paint();
+    const ws = workbook.Sheets[name];
+    const range = usedRange(ws);
+    if (!range) { status('err', '✗ La hoja «' + name + '» está vacía.'); $('resCard').hidden = true; return; }
+    grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, blankrows: false, defval: null, range });
+    source = source.split(' · hoja')[0] + (workbook.SheetNames.length > 1 ? ' · hoja «' + name + '»' : '');
     compute();
   }
   $('usePaste').onclick = () => {
@@ -145,7 +179,7 @@
     if (!txt) return;
     const sep = txt.includes('\t') ? '\t' : (txt.split('\n')[0].includes(';') ? ';' : ',');
     grid = txt.split(/\r?\n/).map(l => l.split(sep).map(c => c.trim()));
-    setMsg($('fname'), 'Datos pegados', '');
+    source = 'datos pegados';
     compute();
   };
   ['factor', 'hue360', 'dec'].forEach(id => $(id).addEventListener('input', () => grid && compute()));
@@ -180,7 +214,7 @@
     const warn = [];
     let parsed;
     try { parsed = parseGrid(grid); }
-    catch (e) { setMsg($('fname'), e.message, 'err'); $('resCard').hidden = true; return; }
+    catch (e) { status('err', '✗ ' + e.message); $('resCard').hidden = true; return; }
     let { wl, cols } = parsed;
     // ordenar por λ ascendente si hace falta
     const idx = wl.map((w, i) => i);
@@ -201,8 +235,19 @@
     if (bad) warn.push(bad + ' muestra(s) tienen celdas vacías o no numéricas; esos puntos se omitieron.');
     $('warn').innerHTML = warn.map(w => '⚠ ' + w).join('<br>');
     $('nres').textContent = '· ' + results.length + ' muestras, ' + wl.length + ' longitudes de onda';
+    const wasHidden = $('resCard').hidden;
     $('resCard').hidden = false;
     render();
+    status('ok', '✓ Datos cargados: ' + source + ' — ' + results.length + ' muestras, ' + wl[0] + '–' + wl[wl.length - 1] + ' nm (' + wl.length + ' puntos). Resultados más abajo.');
+    $('drop').classList.add('loaded');
+    $('dropTxt').innerHTML = '✓ <strong>' + esc(source) + '</strong> cargado — arrastrá otro archivo o hacé clic para cambiarlo';
+    if (wasHidden) $('resCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function status(kind, text) {
+    const el = $('status');
+    el.className = 'show ' + kind;
+    el.innerHTML = (kind === 'busy' ? '<span class="spin"></span>' : '') + '<span>' + esc(text) + '</span>';
   }
 
   // ---------- tabla ----------
