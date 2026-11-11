@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CIELAB de vinos a partir de espectros</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script src="cielab.js"></script>
+<style>
+  :root { --vino:#6d1a36; --vino2:#8e2448; --fondo:#faf7f5; --borde:#e4dcd8; --texto:#2a2224; --gris:#6f6467; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--fondo); color:var(--texto); line-height:1.45; }
+  header { background:var(--vino); color:#fff; padding:28px 20px 22px; }
+  header h1 { margin:0 0 4px; font-size:1.55rem; font-weight:650; }
+  header p { margin:0; opacity:.85; font-size:.95rem; }
+  main { max-width:1100px; margin:0 auto; padding:20px; }
+  .card { background:#fff; border:1px solid var(--borde); border-radius:10px; padding:18px 20px; margin-bottom:18px; }
+  h2 { font-size:1.05rem; margin:0 0 12px; color:var(--vino); }
+  #drop { border:2px dashed var(--borde); border-radius:10px; padding:28px; text-align:center; cursor:pointer; transition:.15s; color:var(--gris); }
+  #drop.over, #drop:hover { border-color:var(--vino2); background:#fbf1f4; color:var(--texto); }
+  #drop strong { color:var(--vino); }
+  textarea { width:100%; min-height:90px; font-family:ui-monospace,Menlo,monospace; font-size:.8rem; border:1px solid var(--borde); border-radius:8px; padding:8px; }
+  .row { display:flex; flex-wrap:wrap; gap:14px 22px; align-items:center; }
+  label { font-size:.9rem; }
+  input[type=number], select { padding:5px 8px; border:1px solid var(--borde); border-radius:6px; font-size:.9rem; }
+  input[type=number] { width:80px; }
+  button { background:var(--vino); color:#fff; border:0; border-radius:7px; padding:8px 14px; font-size:.9rem; cursor:pointer; }
+  button:hover { background:var(--vino2); }
+  button.sec { background:#fff; color:var(--vino); border:1px solid var(--vino); }
+  button:disabled { opacity:.45; cursor:default; }
+  .msg { font-size:.88rem; margin-top:10px; }
+  .msg.err { color:#b00020; } .msg.warn { color:#8a5a00; } .msg.ok { color:#1d6b3a; }
+  .tablewrap { overflow:auto; max-height:70vh; border:1px solid var(--borde); border-radius:8px; }
+  table { border-collapse:collapse; width:100%; font-size:.86rem; font-variant-numeric:tabular-nums; }
+  th, td { padding:6px 10px; border-bottom:1px solid #f0eae7; text-align:right; white-space:nowrap; }
+  th { position:sticky; top:0; background:#f6f0ee; font-weight:600; cursor:pointer; user-select:none; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align:left; }
+  .sw { display:inline-block; width:34px; height:18px; border-radius:4px; border:1px solid rgba(0,0,0,.15); vertical-align:middle; }
+  details { font-size:.88rem; color:var(--gris); }
+  details summary { cursor:pointer; color:var(--texto); }
+  code { background:#f3eeec; padding:1px 4px; border-radius:4px; }
+  footer { text-align:center; color:var(--gris); font-size:.8rem; padding:10px 0 30px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CIELAB de vinos a partir de espectros</h1>
+  <p>Absorbancia 380–780 nm → coordenadas L*, a*, b*, C*, h (iluminante D65, observador 10°)</p>
+</header>
+<main>
+  <section class="card">
+    <h2>1. Cargar espectros</h2>
+    <div id="drop">
+      <strong>Arrastrá un archivo aquí</strong> o hacé clic para elegirlo<br>
+      <small>.xlsx, .xls, .csv o .txt — primera columna: longitud de onda (nm); resto: una columna de absorbancia por muestra</small>
+      <input type="file" id="file" accept=".xlsx,.xls,.ods,.csv,.txt,.tsv" hidden>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label id="sheetWrap" hidden>Hoja: <select id="sheet"></select></label>
+      <span id="fname" class="msg"></span>
+    </div>
+    <details style="margin-top:12px">
+      <summary>…o pegar datos copiados desde Excel</summary>
+      <textarea id="paste" placeholder="longdeonda&#9;muestra1&#9;muestra2&#10;380&#9;0.5576&#9;0.5958&#10;381&#9;0.5462&#9;0.5847&#10;..."></textarea>
+      <button class="sec" id="usePaste">Usar datos pegados</button>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>2. Opciones</h2>
+    <div class="row">
+      <label title="Las absorbancias se multiplican por este factor antes del cálculo. 1 = igual que el script de R.">
+        Factor de paso óptico: <input type="number" id="factor" value="1" step="any" min="0">
+      </label>
+      <label><input type="checkbox" id="hue360"> Expresar h en 0–360° (el script de R da −180 a 180°)</label>
+      <label>Decimales: <input type="number" id="dec" value="4" min="0" max="10"></label>
+    </div>
+    <details style="margin-top:10px">
+      <summary>Sobre el factor de paso óptico</summary>
+      <p>El cálculo usa la absorbancia tal como viene (T = 10<sup>−A</sup>), igual que el código original. Si medís en cubeta de 1 mm y querés expresar el color en 10 mm, poné <code>10</code>; si los datos ya corresponden al paso que querés, dejá <code>1</code>.</p>
+    </details>
+  </section>
+
+  <section class="card" id="resCard" hidden>
+    <div class="row" style="justify-content:space-between; margin-bottom:10px">
+      <h2 style="margin:0">3. Resultados <span id="nres" style="color:var(--gris);font-weight:400"></span></h2>
+      <div class="row" style="gap:8px">
+        <button id="dlCsv">Descargar CSV</button>
+        <button class="sec" id="dlXlsx">Descargar Excel</button>
+      </div>
+    </div>
+    <div id="warn" class="msg warn"></div>
+    <div class="tablewrap"><table id="tbl"></table></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Método de cálculo</summary>
+      <ol>
+        <li>Transmitancia: T(λ) = 10<sup>−A(λ)</sup>.</li>
+        <li>Triestímulos: X = Σ S(λ)·T(λ)·x̄<sub>10</sub>(λ) / Σ S(λ)·ȳ<sub>10</sub>(λ) (ídem Y, Z), con S = iluminante D65 y funciones de igualación CIE 1964 10°, en cada longitud de onda medida.</li>
+        <li>L*a*b* respecto del blanco D65/10° (X<sub>n</sub>=0.94811, Y<sub>n</sub>=1, Z<sub>n</sub>=1.07304).</li>
+        <li>C* = √(a*² + b*²); h = atan2(b*, a*) en grados.</li>
+      </ol>
+      <p>Reproduce <code>colorscience::spectra2XYZ(ciexyzIn = ciexyz64)</code> + <code>XYZ2Lab(illuminant='D65', observer=10)</code>, con las mismas tablas del paquete. Las longitudes de onda fuera de 360–830 nm se ignoran. Todo se calcula en tu navegador: los datos no se suben a ningún servidor.</p>
+    </details>
+  </section>
+</main>
+<footer>Cálculo CIELAB · D65 / 10°</footer>
+
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  let workbook = null, grid = null, results = [], sortKey = null, sortDir = 1;
+
+  // ---------- entrada ----------
+  const drop = $('drop'), fileIn = $('file');
+  drop.onclick = () => fileIn.click();
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]); };
+  fileIn.onchange = () => fileIn.files[0] && readFile(fileIn.files[0]);
+
+  function readFile(f) {
+    const rd = new FileReader();
+    rd.onload = ev => {
+      try {
+        workbook = XLSX.read(ev.target.result, { type: 'array' });
+        const sel = $('sheet'); sel.innerHTML = '';
+        workbook.SheetNames.forEach(n => sel.add(new Option(n, n)));
+        $('sheetWrap').hidden = workbook.SheetNames.length < 2;
+        setMsg($('fname'), f.name, '');
+        loadSheet(workbook.SheetNames[0]);
+      } catch (err) { setMsg($('fname'), 'No se pudo leer el archivo: ' + err.message, 'err'); }
+    };
+    rd.readAsArrayBuffer(f);
+  }
+  $('sheet').onchange = e => loadSheet(e.target.value);
+  function loadSheet(name) {
+    grid = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, blankrows: false, defval: null });
+    compute();
+  }
+  $('usePaste').onclick = () => {
+    const txt = $('paste').value.trim();
+    if (!txt) return;
+    const sep = txt.includes('\t') ? '\t' : (txt.split('\n')[0].includes(';') ? ';' : ',');
+    grid = txt.split(/\r?\n/).map(l => l.split(sep).map(c => c.trim()));
+    setMsg($('fname'), 'Datos pegados', '');
+    compute();
+  };
+  ['factor', 'hue360', 'dec'].forEach(id => $(id).addEventListener('input', () => grid && compute()));
+
+  // ---------- parseo ----------
+  const num = v => {
+    if (typeof v === 'number') return v;
+    if (v == null || v === '') return NaN;
+    return Number(String(v).replace(',', '.'));
+  };
+  function parseGrid(g) {
+    // fila de encabezado = última fila no numérica antes de la primera fila con λ numérica
+    const rows = g.filter(r => r && r.some(c => c !== null && c !== ''));
+    let first = rows.findIndex(r => isFinite(num(r[0])) && r.slice(1).some(c => isFinite(num(c))));
+    if (first < 0) throw new Error('No se encontraron filas numéricas (λ en la primera columna).');
+    const hdr = first > 0 ? rows[first - 1] : null;
+    const body = rows.slice(first).filter(r => isFinite(num(r[0])));
+    const ncol = Math.max(...body.map(r => r.length));
+    const cols = [];
+    for (let j = 1; j < ncol; j++) {
+      const vals = body.map(r => num(r[j]));
+      if (vals.every(v => !isFinite(v))) continue;
+      const name = hdr && hdr[j] != null && String(hdr[j]).trim() !== '' ? String(hdr[j]).trim() : 'muestra_' + j;
+      cols.push({ name, vals });
+    }
+    const wl = body.map(r => num(r[0]));
+    return { wl, cols };
+  }
+
+  // ---------- cálculo ----------
+  function compute() {
+    const warn = [];
+    let parsed;
+    try { parsed = parseGrid(grid); }
+    catch (e) { setMsg($('fname'), e.message, 'err'); $('resCard').hidden = true; return; }
+    let { wl, cols } = parsed;
+    // ordenar por λ ascendente si hace falta
+    const idx = wl.map((w, i) => i);
+    if (wl.some((w, i) => i && w < wl[i - 1])) { idx.sort((a, b) => wl[a] - wl[b]); warn.push('Las longitudes de onda no estaban en orden ascendente; se ordenaron.'); }
+    wl = idx.map(i => wl[i]);
+    const [lo, hi] = CIELAB.range;
+    const out = wl.filter(w => w < lo || w > hi).length;
+    if (out) warn.push(out + ' longitudes de onda fuera de ' + lo + '–' + hi + ' nm se ignoraron.');
+    if (wl[0] > 380 || wl[wl.length - 1] < 780) warn.push('El rango medido (' + wl[0] + '–' + wl[wl.length - 1] + ' nm) no cubre 380–780 nm; los resultados pueden no ser comparables.');
+    const factor = num($('factor').value) || 1, hue360 = $('hue360').checked;
+    let bad = 0;
+    results = cols.map(c => {
+      const a = idx.map(i => c.vals[i] * factor);
+      if (a.some(v => !isFinite(v))) bad++;
+      const r = CIELAB.spectrumToLab(wl, a, { hue360 });
+      return { tratamiento: c.name, h: r.h, L: r.L, a: r.a, b: r.b, C: r.C, rgb: CIELAB.labToRgb(r.L, r.a, r.b) };
+    });
+    if (bad) warn.push(bad + ' muestra(s) tienen celdas vacías o no numéricas; esos puntos se omitieron.');
+    $('warn').innerHTML = warn.map(w => '⚠ ' + w).join('<br>');
+    $('nres').textContent = '· ' + results.length + ' muestras, ' + wl.length + ' longitudes de onda';
+    $('resCard').hidden = false;
+    render();
+  }
+
+  // ---------- tabla ----------
+  const COLS = [['tratamiento', 'Muestra'], ['color', 'Color'], ['h', 'h (°)'], ['L', 'L*'], ['a', 'a*'], ['b', 'b*'], ['C', 'C*']];
+  function render() {
+    const d = Math.max(0, Math.min(10, parseInt($('dec').value) || 0));
+    let rows = results.slice();
+    if (sortKey && sortKey !== 'color') rows.sort((x, y) => (x[sortKey] > y[sortKey] ? 1 : x[sortKey] < y[sortKey] ? -1 : 0) * sortDir);
+    const th = COLS.map(([k, t]) => '<th data-k="' + k + '">' + t + (sortKey === k ? (sortDir > 0 ? ' ▲' : ' ▼') : '') + '</th>').join('');
+    const tb = rows.map(r => '<tr><td>' + esc(r.tratamiento) + '</td><td><span class="sw" style="background:rgb(' + r.rgb + ')"></span></td>' +
+      ['h', 'L', 'a', 'b', 'C'].map(k => '<td>' + r[k].toFixed(d) + '</td>').join('') + '</tr>').join('');
+    $('tbl').innerHTML = '<thead><tr>' + th + '</tr></thead><tbody>' + tb + '</tbody>';
+    $('tbl').querySelectorAll('th').forEach(h => h.onclick = () => {
+      const k = h.dataset.k; if (k === 'color') return;
+      sortDir = sortKey === k ? -sortDir : 1; sortKey = k; render();
+    });
+  }
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // ---------- descargas ----------
+  const table = () => results.map(r => ({ tratamiento: r.tratamiento, h: r.h, L: r.L, a: r.a, b: r.b, C: r.C }));
+  $('dlCsv').onclick = () => {
+    const lines = ['tratamiento,h,L,a,b,C'].concat(table().map(r =>
+      ['"' + String(r.tratamiento).replace(/"/g, '""') + '"', r.h, r.L, r.a, r.b, r.C].join(',')));
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cielab.csv'; a.click();
+  };
+  $('dlXlsx').onclick = () => {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(table()), 'CIELAB');
+    XLSX.writeFile(wb, 'cielab.xlsx');
+  };
+
+  function setMsg(el, t, cls) { el.textContent = t; el.className = 'msg ' + (cls || ''); }
+})();
+</script>
+</body>
+</html>
